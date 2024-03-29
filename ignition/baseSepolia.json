@@ -1,0 +1,6 @@
+{
+    "DelayedExecutionModule": {
+        "owner": "0xfe9a6492dD767525D46b0F69c5c90861f2819b5C",
+        "minExecCooldown": "15"
+    }
+}
