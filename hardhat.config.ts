@@ -8,7 +8,15 @@ const ETHERSCAN_KEY = vars.get("ETHERSCAN_KEY");
 const BASE_ETHERSCAN_KEY = vars.get("BASE_ETHERSCAN_KEY");
 
 const config: HardhatUserConfig = {
-  solidity: "0.8.25",
+  solidity: {
+    version: "0.8.24",
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 1000,
+      },
+    },
+  },
   networks: {
     sepolia: {
       url: "https://sepolia.drpc.org",
