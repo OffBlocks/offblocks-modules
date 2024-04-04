@@ -1,3 +1,4 @@
 {
-  "DelayedExecutionModule#DelayedExecution": "0x326432c5b4ed7Fb16A642F95f50Acd70Ac0f92AE"
+  "FiatPaymentModule#FiatPayment": "0x76c389a9B8e958e5554385Aa61C7b67cED4C359C",
+  "DelayedExecutionModule#DelayedExecution": "0x7E320a0dbFA49bd0B5bcA996E144d6c2d5D5462C"
 }

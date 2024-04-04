@@ -1,6 +1,7 @@
 import {HardhatUserConfig, vars} from "hardhat/config";
 import "@nomicfoundation/hardhat-foundry";
 import "@nomicfoundation/hardhat-toolbox";
+import "@nomicfoundation/hardhat-viem";
 
 const ALCHEMY_BASE_SEPOLIA_API_KEY = vars.get("ALCHEMY_BASE_SEPOLIA_API_KEY");
 const SEPOLIA_PRIVATE_KEY = vars.get("SEPOLIA_PRIVATE_KEY");
@@ -31,7 +32,7 @@ const config: HardhatUserConfig = {
   ignition: {
     strategyConfig: {
       create2: {
-        salt: "0x31087fb5f52dd6901b8d3f2de463ce9da41334b91408a0bc6153304fb1529010",
+        salt: "0x7101fad7e81cfe5a6fcbfcec05cc7b7c4c1ccf262bb01f1f20b8750826debc47",
       },
     },
   },

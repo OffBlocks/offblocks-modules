@@ -11,17 +11,28 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableMap} from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
+/**
+ * @title DelayedExecution
+ * @author OffBlocks Team
+ * @notice Delayed execution module that allows for the initiation of transactions with a cooldown period
+ */
 contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
-  error UnsupportedExecution();
-  error ExecutionNotAuthorized();
-  error InvalidConfig();
-  error InvalidExecutionHash(bytes32 executionHash);
-
   using EnumerableMap for EnumerableMap.Bytes32ToUintMap;
   using EnumerableSet for EnumerableSet.AddressSet;
 
   bytes32 internal constant PASS = keccak256("pass");
 
+  /**
+   * @notice A struct representing module configuration for the account
+   * @param cooldown uint256 - The cooldown period in seconds
+   * @param whitelist EnumerableSet.AddressSet - The set of whitelisted executor addresses
+   */
+  struct DelayConfig {
+    uint256 cooldown;
+    EnumerableSet.AddressSet whitelist;
+  }
+
+  /// @notice An event emitted when an execution is initiated
   event ExecutionInitiated(
     address indexed smartAccount,
     address indexed target,
@@ -31,6 +42,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     uint256 nonce
   );
 
+  /// @notice An event emitted when an execution is skipped
   event ExecutionSkipped(
     address indexed smartAccount,
     address indexed target,
@@ -39,6 +51,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     uint256 nonce
   );
 
+  /// @notice An event emitted when an execution is submitted
   event ExecutionSubmitted(
     address indexed smartAccount,
     address indexed target,
@@ -47,34 +60,48 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     uint256 nonce
   );
 
+  /// @notice An error thrown when the execution is not supported
+  error UnsupportedExecution();
+
+  /// @notice An error thrown when the caller is not authorized to perform an operation
+  error UnauthorizedAccess();
+
+  /// @notice An error thrown when the execution is not authorized
+  error ExecutionNotAuthorized();
+
+  /// @notice An error thrown when the supplied module configuration is invalid
+  error InvalidConfig();
+
+  /// @notice An error thrown when the execution hash is not found
+  error ExecutionHashNotFound(bytes32 executionHash);
+
+  /// @notice The minimum cooldown period required before the transaction can be executed
   uint256 public minExecCooldown;
 
-  struct DelayConfig {
-    uint256 cooldown;
-    EnumerableSet.AddressSet whitelist;
-  }
-
-  // Mapping to keep track of smart account config.
+  /// @notice Mapping to keep track of smart account config.
   mapping(address smartAccount => DelayConfig config) internal configs;
 
-  // Mapping to keep track of executions.
+  /// @notice Set to keep track of enabled smart accounts.
+  EnumerableSet.AddressSet internal accounts;
+
+  /// @notice Mapping to keep track of executions.
   mapping(address smartAccount => EnumerableMap.Bytes32ToUintMap exec)
     internal executions;
 
-  // Mapping to keep track of account nonces.
+  /// @notice Mapping to keep track of account nonces.
   mapping(address smartAccount => uint256 nonce) internal nonces;
 
-  // Mapping to keep track of account execution queue nonces.
+  /// @notice Mapping to keep track of account execution queue nonces.
   mapping(address smartAccount => uint256 queueNonce) internal queueNonces;
 
-  // Mapping to keep track of execution nonces.
+  /// @notice Mapping to keep track of execution nonces.
   mapping(bytes32 execHash => uint256 nonce) internal execNonces;
 
   constructor(address _owner, uint256 _minExecCooldown) Ownable(_owner) {
     minExecCooldown = _minExecCooldown;
   }
 
-  /// @dev Sets the minimum cooldown period.
+  /// @notice Sets the minimum cooldown period.
   /// @param _minExecCooldown Minimum cooldown in seconds that should be required before the transaction can be executed
   /// @notice This can only be called by the owner
   function setMinExecCooldown(uint256 _minExecCooldown) external onlyOwner {
@@ -102,20 +129,31 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     for (uint256 i = 0; i < _whitelist.length; i++) {
       _config.whitelist.add(_whitelist[i]);
     }
+
+    accounts.add(msg.sender);
   }
 
   function onUninstall(bytes calldata) external override {
     delete configs[msg.sender];
+    accounts.remove(msg.sender);
   }
 
-  /// @dev Checks if the module has been initialized for the account.
+  /// @notice Checks if the module has been initialized for the account.
   /// @param _account The account address
   /// @return true if the module has been initialized, false otherwise
   function isInitialized(address _account) external view returns (bool) {
-    return configs[_account].cooldown != 0;
+    return accounts.contains(_account);
   }
 
-  /// @dev Checks if the target has been whitelisted for the account.
+  /// @notice Throws if called by any account other than a registered smart account.
+  modifier onlySmartAccount() {
+    if (!accounts.contains(msg.sender)) {
+      revert UnauthorizedAccess();
+    }
+    _;
+  }
+
+  /// @notice Checks if the target has been whitelisted for the account.
   /// @param _account The account address
   /// @param _target The target address
   /// @return true if the target has been whitelisted, false otherwise
@@ -130,19 +168,15 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
                                      HOOK LOGIC
     //////////////////////////////////////////////////////////////////////////*/
 
-  // @dev Initiates an execution.
-  // @param _target The target address to call
-  // @param _value The value to send
-  // @param _callData The call data
+  /// @notice Initiates an execution.
+  /// @param _target The target address to call
+  /// @param _value The value to send
+  /// @param _callData The call data
   function initExecution(
     address _target,
     uint256 _value,
     bytes calldata _callData
-  ) external {
-    if (!this.isInitialized(msg.sender)) {
-      revert InvalidConfig();
-    }
-
+  ) external onlySmartAccount {
     bytes32 executionHash = _execDigest(_target, _value, _callData);
     uint256 createdAt = block.timestamp;
 
@@ -169,24 +203,20 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     );
   }
 
-  // @dev Skips an execution by advancing account nonce.
-  // @param _target The target address to call
-  // @param _value The value to send
-  // @param _callData The call data
+  /// @notice Skips an execution by advancing account nonce.
+  /// @param _target The target address to call
+  /// @param _value The value to send
+  /// @param _callData The call data
   function skipExecution(
     address _target,
     uint256 _value,
     bytes calldata _callData
-  ) external {
-    if (!this.isInitialized(msg.sender)) {
-      revert InvalidConfig();
-    }
-
+  ) external onlySmartAccount {
     bytes32 executionHash = _execDigest(_target, _value, _callData);
     uint256 nonce = execNonces[executionHash];
 
     if (nonce == 0) {
-      revert InvalidExecutionHash(executionHash);
+      revert ExecutionHashNotFound(executionHash);
     }
 
     uint256 accountNonce = ++nonces[msg.sender];
@@ -198,9 +228,9 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     emit ExecutionSkipped(msg.sender, _target, _value, _callData, nonce);
   }
 
-  // @dev Checks if an account has pending executions.
-  // @param _account The account address
-  // @return true if the account has pending executions, false otherwise
+  /// @notice Checks if an account has pending executions.
+  /// @param _account The account address
+  /// @return true if the account has pending executions, false otherwise
   function hasPendingExecution(address _account) external view returns (bool) {
     return queueNonces[_account] > nonces[_account];
   }
@@ -212,7 +242,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     bytes calldata _callData
   ) internal virtual override returns (bytes memory hookData) {
     if (!this.isInitialized(msg.sender)) {
-      revert InvalidConfig();
+      revert UnauthorizedAccess();
     }
 
     bytes4 functionSig;
@@ -241,13 +271,13 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
   }
 
   function onExecuteFromExecutor(
-    address,
+    address _executor,
     address _target,
     uint256 _value,
     bytes calldata _callData
   ) internal virtual override returns (bytes memory hookData) {
     if (!this.isInitialized(msg.sender)) {
-      revert InvalidConfig();
+      revert UnauthorizedAccess();
     }
 
     bytes4 functionSig;
@@ -265,7 +295,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
         functionSig == this.skipExecution.selector)
     ) {
       return abi.encode(PASS);
-    } else if (_config.whitelist.contains(_target)) {
+    } else if (_config.whitelist.contains(_executor)) {
       return abi.encode(PASS);
     } else {
       bytes32 executionHash = _execDigestMemory(_target, _value, _callData);
@@ -273,7 +303,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
         executionHash
       );
 
-      if (!success) revert InvalidExecutionHash(executionHash);
+      if (!success) revert ExecutionHashNotFound(executionHash);
 
       uint256 accountNonce = ++nonces[msg.sender];
       uint256 nonce = execNonces[executionHash];
@@ -317,7 +347,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
                                    EXECUTOR LOGIC
     //////////////////////////////////////////////////////////////////////////*/
 
-  /// @dev Executes a single call.
+  /// @notice Executes a single call.
   /// @param _account The account address
   /// @param _target The target address to call
   /// @param _value The value to send
@@ -327,7 +357,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     address _target,
     uint256 _value,
     bytes calldata _callData
-  ) external payable {
+  ) external {
     IERC7579Account(_account).executeFromExecutor(
       ModeLib.encodeSimpleSingle(),
       ExecutionLib.encodeSingle(_target, _value, _callData)
@@ -352,27 +382,21 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
                                      METADATA
     //////////////////////////////////////////////////////////////////////////*/
 
-  /**
-   * The name of the module
-   * @return name The name of the module
-   */
+  /// @notice The name of the module
+  /// @return name The name of the module
   function name() external pure returns (string memory) {
     return "DelayedExecution";
   }
 
-  /**
-   * The version of the module
-   * @return version The version of the module
-   */
+  /// @notice The version of the module
+  /// @return version The version of the module
   function version() external pure returns (string memory) {
     return "0.0.1";
   }
 
-  /*
-   * Check if the module is of a certain type
-   * @param typeID The type ID to check
-   * @return true if the module is of the given type, false otherwise
-   */
+  /// @notice Check if the module is of a certain type
+  /// @param typeID The type ID to check
+  /// @return true if the module is of the given type, false otherwise
   function isModuleType(uint256 typeID) external pure override returns (bool) {
     return typeID == TYPE_HOOK || typeID == TYPE_EXECUTOR;
   }

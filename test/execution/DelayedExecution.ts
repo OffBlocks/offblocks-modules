@@ -157,7 +157,7 @@ describe("DelayedExecution", function () {
 
       await expect(
         exec.connect(other).initExecution(await token.getAddress(), 0, transfer)
-      ).to.be.revertedWithCustomError(exec, "InvalidConfig");
+      ).to.be.revertedWithCustomError(exec, "UnauthorizedAccess");
     });
 
     it("Should enqueue execution on initExecution if exec is initialized for the account", async function () {
@@ -294,7 +294,7 @@ describe("DelayedExecution", function () {
         exec
           .connect(other)
           .skipExecution(await token.getAddress(), 0, transfer5)
-      ).to.be.revertedWithCustomError(exec, "InvalidExecutionHash");
+      ).to.be.revertedWithCustomError(exec, "ExecutionHashNotFound");
     });
 
     it("Should revert on skipExecution if skipping is out of order", async function () {
@@ -357,7 +357,7 @@ describe("DelayedExecution", function () {
 
       await expect(
         exec.connect(other).preCheck(other, execute)
-      ).to.be.revertedWithCustomError(exec, "InvalidExecutionHash");
+      ).to.be.revertedWithCustomError(exec, "ExecutionHashNotFound");
     });
 
     it("Should revert on executeFromExecutor if execution is out of order", async function () {
@@ -486,7 +486,7 @@ describe("DelayedExecution", function () {
         .onInstall(
           coder.encode(
             ["uint256", "address[]"],
-            [THIRTY_SECONDS, [await token.getAddress()]]
+            [THIRTY_SECONDS, [other.address]]
           )
         );
 
@@ -558,26 +558,6 @@ describe("DelayedExecution", function () {
           )
       ).to.emit(exec, "ExecutionInitiated");
 
-      console.log([
-        "0x326432c5b4ed7Fb16A642F95f50Acd70Ac0f92AE",
-        0,
-        exec.interface.encodeFunctionData("initExecution", [
-          "0xCe359Fe4fbbd25c2Ac36549852e175A486AD8428",
-          0,
-          encodeTransfer("0xfe9a6492dD767525D46b0F69c5c90861f2819b5C", 9000000),
-        ]),
-      ]);
-
-      console.log([
-        "0x326432c5b4ed7Fb16A642F95f50Acd70Ac0f92AE",
-        0,
-        exec.interface.encodeFunctionData("skipExecution", [
-          "0xCe359Fe4fbbd25c2Ac36549852e175A486AD8428",
-          0,
-          encodeTransfer("0xfe9a6492dD767525D46b0F69c5c90861f2819b5C", 9000000),
-        ]),
-      ]);
-
       const unlockTime = (await time.latest()) + THIRTY_SECONDS;
       await time.increaseTo(unlockTime);
 
@@ -589,12 +569,6 @@ describe("DelayedExecution", function () {
           encodeTransfer(await owner.getAddress(), 1000000)
         )
       ).to.emit(exec, "ExecutionSubmitted");
-
-      console.log([
-        "0xCe359Fe4fbbd25c2Ac36549852e175A486AD8428",
-        0,
-        encodeTransfer("0xfe9a6492dD767525D46b0F69c5c90861f2819b5C", 9000000),
-      ]);
     });
   });
 });
