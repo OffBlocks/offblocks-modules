@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC7579Account} from "modulekit/Accounts.sol";
 import {ERC7579ExecutorBase} from "modulekit/modules/ERC7579ExecutorBase.sol";
+import {SessionKeyBase} from "modulekit/modules/SessionKeyBase.sol";
 import {ERC20Integration} from "modulekit/integrations/ERC20.sol";
 import {ExecutionLib, Execution} from "erc7579/lib/ExecutionLib.sol";
 import {ModeLib} from "erc7579/lib/ModeLib.sol";
@@ -19,7 +20,7 @@ import "./SpendLimit.sol";
  * @author OffBlocks Team
  * @notice Fiat payment module and escrow contract for OffBlocks to handle token reservations and withdrawals based on the off-chain events and conditions (EVM version)
  */
-contract FiatPayment is Ownable, ERC7579ExecutorBase {
+contract FiatPayment is ERC7579ExecutorBase, SessionKeyBase, Ownable {
   using EnumerableSet for EnumerableSet.AddressSet;
 
   /**
@@ -44,6 +45,10 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
     ReservationStatus status;
     uint256 createdAt;
     uint256 updatedAt;
+  }
+  struct ScopedAccess {
+    address signer;
+    address token;
   }
 
   /// @notice An enum representing all possible reservation statuses
@@ -244,31 +249,7 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
     //////////////////////////////////////////////////////////////////////////*/
 
   function onInstall(bytes calldata _data) external override {
-    SpendLimit _limit = new SpendLimit(address(this));
-    (
-      address[] memory _tokens,
-      uint256[] memory _dailyLimits,
-      uint256[] memory _monthlyLimits
-    ) = abi.decode(_data, (address[], uint256[], uint256[]));
-
-    if (
-      _tokens.length != _dailyLimits.length ||
-      _tokens.length != _monthlyLimits.length
-    ) {
-      revert InvalidConfig();
-    }
-
-    for (uint256 i = 0; i < _tokens.length; i++) {
-      _limit.setSpendingLimit(
-        _tokens[i],
-        _dailyLimits[i],
-        _monthlyLimits[i],
-        block.timestamp
-      );
-    }
-
-    limits[msg.sender] = _limit;
-
+    limits[msg.sender] = new SpendLimit(msg.sender, address(this), _data);
     accounts.add(msg.sender);
   }
 
@@ -290,6 +271,10 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
     _;
   }
 
+  /*//////////////////////////////////////////////////////////////////////////
+                                   EXECUTOR LOGIC
+    //////////////////////////////////////////////////////////////////////////*/
+
   /**
    * @notice Reserve tokens into the escrow
    * @param _token address - The address of the token to be reservationed
@@ -297,7 +282,6 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
    * @param _splitAddresses address[] memory - The addresses to which the split amounts will be sent if reservation is approved
    * @dev The token must be supported by the escrow
    * @dev The amount must be greater than zero
-   * @dev The account must have approved the escrow to transfer the amount of the token
    * @dev The transaction must be sent from a smart wallet
    * @dev The account must have enough balance of the token
    */
@@ -366,7 +350,6 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
    * @dev The amount must be greater than zero
    * @dev The amount must be greater than the old amount
    * @dev The reservation must be pending
-   * @dev The account must have approved the escrow to transfer the amount of the token
    * @dev The account must have enough balance of the token
    * @dev Emits a {ReservationIncreased} event
    */
@@ -375,6 +358,8 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
     uint256[] memory _splitAmounts
   ) external onlySmartAccount {
     Reservation memory userReservation = getReservationById(_reservationId);
+
+    if (msg.sender != userReservation.account) revert UnauthorizedAccess();
 
     uint256 oldAmount = userReservation.amount;
     uint256 newAmount = _getSum(_splitAmounts);
@@ -680,6 +665,44 @@ contract FiatPayment is Ownable, ERC7579ExecutorBase {
       sum = sum + _values[i];
     }
     return sum;
+  }
+
+  /*//////////////////////////////////////////////////////////////////////////
+                                VALIDATOR LOGIC
+    //////////////////////////////////////////////////////////////////////////*/
+
+  /// @notice validates that the call (destinationContract, callValue, funcCallData)
+  /// complies with the Session Key permissions represented by sessionKeyData
+  /// @param _target address of the contract to be called
+  /// @param _callData the data for the call.
+  /// @param _sessionKeyData SessionKey data, that describes sessionKey permissions
+  /// @return signer SessionKey signer address
+  function validateSessionParams(
+    address _target,
+    uint256 /*_value*/,
+    bytes calldata _callData,
+    bytes calldata _sessionKeyData,
+    bytes calldata /*_callSpecificData*/
+  ) public virtual override onlyThis(_target) returns (address signer) {
+    bytes4 functionSig;
+
+    if (_callData.length >= 4) {
+      functionSig = bytes4(_callData[0:4]);
+    }
+
+    if (
+      functionSig != this.reserve.selector &&
+      functionSig != this.updateReservation.selector
+    ) revert InvalidMethod(functionSig);
+
+    ScopedAccess memory access = abi.decode(_sessionKeyData, (ScopedAccess));
+
+    if (functionSig == this.reserve.selector) {
+      address token = abi.decode(_callData[4:24], (address));
+      if (token != access.token) revert UnauthorizedAccess();
+    }
+
+    return access.signer;
   }
 
   /*//////////////////////////////////////////////////////////////////////////

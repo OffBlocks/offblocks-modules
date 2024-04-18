@@ -36,6 +36,9 @@ contract SpendLimit is Ownable {
   /// @notice Mapping of tokens to their spending limits
   mapping(address => Limit) public limits;
 
+  /// @notice The address of the spender contract
+  address private spender;
+
   /// @notice An event emitted when spending limits are updated
   event SpendingLimitUpdated(
     address indexed token,
@@ -45,6 +48,12 @@ contract SpendLimit is Ownable {
 
   /// @notice An event emitted when spending limits are removed
   event SpendingLimitRemoved(address indexed token);
+
+  /// @notice An error thrown when the initial configuration is invalid
+  error InvalidConfig();
+
+  /// @notice An error thrown when the account is not authorized to perform an operation
+  error UnauthorizedAccount(address account);
 
   /// @notice An error thrown when the amount is zero
   error ZeroAmount();
@@ -58,53 +67,65 @@ contract SpendLimit is Ownable {
   /// @notice An error thrown when the amount exceeds the remaining monthly available amount
   error ExceedsMonthlyLimit();
 
-  constructor(address _owner) Ownable(_owner) {}
+  /**
+   * @notice The constructor for the SpendLimit contract
+   * @param _owner address - The address of the owner account
+   * @param _spender address - The address of the spender contract
+   * @param _initConfig bytes - The initial configuration for the SpendLimit contract
+   */
+  constructor(
+    address _owner,
+    address _spender,
+    bytes memory _initConfig
+  ) Ownable(_owner) {
+    spender = _spender;
+
+    (
+      address[] memory tokens,
+      uint256[] memory dailyLimits,
+      uint256[] memory monthlyLimits
+    ) = abi.decode(_initConfig, (address[], uint256[], uint256[]));
+
+    if (
+      tokens.length != dailyLimits.length ||
+      tokens.length != monthlyLimits.length
+    ) {
+      revert InvalidConfig();
+    }
+
+    for (uint256 i = 0; i < tokens.length; i++) {
+      _setLimit(tokens[i], dailyLimits[i], monthlyLimits[i]);
+    }
+  }
+
+  /// @notice Throws if called by any account other than the spender
+  modifier onlySpender() {
+    if (spender != msg.sender) {
+      revert UnauthorizedAccount(msg.sender);
+    }
+    _;
+  }
 
   /**
    * @notice This function enables a daily and monthly spending limit for a specific tokens
    * @param _token address - ERC20 token address that a given spending limit is applied
    * @param _dailyAmount uint256 - The amount of a daily spending limit in wei or token units (non-zero)
    * @param _monthlyAmount uint256 - The amount of a monthly spending limit in wei or token units (non-zero)
-   * @param _resetTime uint256 - The block.timestamp at which the available amount is restored
-   * @dev Only the account that inherits this contract can call this function
+   * @dev Only the owner account can call this function
    * @dev Emits a {SpendingLimitUpdated} event
    */
   function setSpendingLimit(
     address _token,
     uint256 _dailyAmount,
-    uint256 _monthlyAmount,
-    uint256 _resetTime
+    uint256 _monthlyAmount
   ) public onlyOwner {
-    if (_dailyAmount == 0 || _monthlyAmount == 0) revert ZeroAmount();
-
-    uint256 dailyResetTime;
-    uint256 monthlyResetTime;
-
-    if (isValidUpdate(_token)) {
-      dailyResetTime = _resetTime + ONE_DAY;
-      monthlyResetTime = _resetTime + ONE_MONTH;
-    } else {
-      dailyResetTime = _resetTime;
-      monthlyResetTime = _resetTime;
-    }
-
-    _updateLimit(
-      _token,
-      _dailyAmount,
-      _monthlyAmount,
-      _dailyAmount,
-      _monthlyAmount,
-      dailyResetTime,
-      monthlyResetTime
-    );
-
-    emit SpendingLimitUpdated(_token, _dailyAmount, _monthlyAmount);
+    _setLimit(_token, _dailyAmount, _monthlyAmount);
   }
 
   /**
    * @notice This function disables an active spending limit for a specific token
    * @param _token address - ERC20 token address that a given spending limit is applied on
-   * @dev Only the account that inherits this contract can call this function
+   * @dev Only owner account can call this function
    * @dev Emits a {SpendingLimitRemoved} event
    */
   function removeSpendingLimit(address _token) public onlyOwner {
@@ -137,12 +158,13 @@ contract SpendLimit is Ownable {
    * @notice This function checks if the amount exceeds the remaining available amount
    * @param _token address - ERC20 token address that a given spending limit is applied on
    * @param _amount uint256 - The amount of tokens to be spent
+   * @dev Only spender account can call this function
    * @dev Reverts if the amount exceeds the remaining available amount for either the daily limit or the monthly spending limit
    */
   function checkSpendingLimit(
     address _token,
     uint256 _amount
-  ) public onlyOwner {
+  ) public onlySpender {
     Limit storage limit = limits[_token];
 
     uint256 timestamp = block.timestamp;
@@ -169,13 +191,14 @@ contract SpendLimit is Ownable {
    * @param _token address - ERC20 token address that a given spending limit is applied on
    * @param _amount uint256 - The amount of tokens to be reverted
    * @param _timestamp uint256 - The block.timestamp at which the payment was made
+   * @dev Only spender account can call this function
    * @dev Updates the daily and monthly available amount based on the amount to be reverted if the payment was made on the same day or month
    */
   function revertSpendingLimit(
     address _token,
     uint256 _amount,
     uint256 _timestamp
-  ) public onlyOwner {
+  ) public onlySpender {
     Limit storage limit = limits[_token];
 
     uint256 timestamp = block.timestamp;
@@ -187,6 +210,45 @@ contract SpendLimit is Ownable {
     if (_timestamp >= timestamp - ONE_MONTH) {
       limit.monthlyAvailable += _amount;
     }
+  }
+
+  /**
+   * @notice This function enables a daily and monthly spending limit for a specific token
+   * @param _token address - ERC20 token address that a given spending limit is applied
+   * @param _dailyAmount uint256 - The amount of a daily spending limit in wei or token units (non-zero)
+   * @param _monthlyAmount uint256 - The amount of a monthly spending limit in wei or token units (non-zero)
+   * @dev Emits a {SpendingLimitUpdated} event
+   */
+  function _setLimit(
+    address _token,
+    uint256 _dailyAmount,
+    uint256 _monthlyAmount
+  ) private {
+    if (_dailyAmount == 0 || _monthlyAmount == 0) revert ZeroAmount();
+
+    uint256 dailyResetTime;
+    uint256 monthlyResetTime;
+    uint256 resetTime = block.timestamp;
+
+    if (isValidUpdate(_token)) {
+      dailyResetTime = resetTime + ONE_DAY;
+      monthlyResetTime = resetTime + ONE_MONTH;
+    } else {
+      dailyResetTime = resetTime;
+      monthlyResetTime = resetTime;
+    }
+
+    _updateLimit(
+      _token,
+      _dailyAmount,
+      _monthlyAmount,
+      _dailyAmount,
+      _monthlyAmount,
+      dailyResetTime,
+      monthlyResetTime
+    );
+
+    emit SpendingLimitUpdated(_token, _dailyAmount, _monthlyAmount);
   }
 
   /**

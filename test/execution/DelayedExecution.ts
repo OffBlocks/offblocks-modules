@@ -9,7 +9,6 @@ import {
   encodeExecuteFromExecutor,
   HashZero,
 } from "../utils/testUtils";
-import {ZeroHash, solidityPacked} from "ethers";
 
 describe("DelayedExecution", function () {
   // We define a fixture to reuse the same setup in every test.
@@ -29,23 +28,6 @@ describe("DelayedExecution", function () {
     const exec = await DelayedExecution.deploy(owner, FIFTEEN_SECONDS);
 
     return {exec, owner, other, coder};
-  }
-
-  async function deployBootstrapFixture() {
-    const Bootstrap = await hre.ethers.getContractFactory("Bootstrap");
-    const bootstrap = await Bootstrap.deploy();
-
-    return {bootstrap};
-  }
-
-  async function deployFactoryFixture() {
-    const MSAAdvanced = await hre.ethers.getContractFactory("MSAAdvanced");
-    const account = await MSAAdvanced.deploy();
-
-    const MSAFactory = await hre.ethers.getContractFactory("MSAFactory");
-    const factory = await MSAFactory.deploy(await account.getAddress());
-
-    return {factory};
   }
 
   async function deployMockTokenFixture() {
@@ -502,73 +484,6 @@ describe("DelayedExecution", function () {
 
       await expect(exec.connect(other).preCheck(other, execute)).to.not.be
         .reverted;
-    });
-  });
-
-  describe("End-to-end", function () {
-    it("Should submit execution on execute", async function () {
-      const THIRTY_SECONDS = 30;
-
-      const {exec, coder, owner} = await loadFixture(
-        deployDelayedExecutionFixture
-      );
-
-      const {bootstrap} = await loadFixture(deployBootstrapFixture);
-      const {factory} = await loadFixture(deployFactoryFixture);
-
-      const initCode = await bootstrap._getInitMSACalldata(
-        [],
-        [
-          {
-            module: await exec.getAddress(),
-            data: coder.encode(["uint256", "address[]"], [15, []]),
-          },
-        ],
-        {
-          module: await exec.getAddress(),
-          data: coder.encode(["uint256", "address[]"], [15, []]),
-        },
-        []
-      );
-
-      await factory.connect(owner).createAccount(ZeroHash, initCode);
-
-      const address = await factory.connect(owner).getFunction("getAddress")(
-        ZeroHash,
-        initCode
-      );
-
-      const {token} = await loadFixture(deployMockTokenFixture);
-
-      expect(await token.connect(owner).mint(address, 10000000)).not.to.be
-        .reverted;
-
-      await expect(
-        exec
-          .connect(owner)
-          .execute(
-            address,
-            await exec.getAddress(),
-            0,
-            exec.interface.encodeFunctionData("initExecution", [
-              await token.getAddress(),
-              0,
-              encodeTransfer(await owner.getAddress(), 1000000),
-            ])
-          )
-      ).to.emit(exec, "ExecutionInitiated");
-
-      const unlockTime = (await time.latest()) + THIRTY_SECONDS;
-      await time.increaseTo(unlockTime);
-
-      await expect(
-        exec.execute(
-          address,
-          await token.getAddress(),
-          0,
-          encodeTransfer(await owner.getAddress(), 1000000)
-        )
-      ).to.emit(exec, "ExecutionSubmitted");
     });
   });
 });

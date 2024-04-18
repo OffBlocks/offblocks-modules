@@ -45,8 +45,6 @@ import {
 
 import hre from "hardhat";
 import {vars} from "hardhat/config";
-import {encode} from "punycode";
-import {decodeRevertReason} from "../test/utils/testUtils";
 
 const CALLTYPE_SINGLE = "0x00";
 const CALLTYPE_BATCH = "0x01";
@@ -126,9 +124,9 @@ async function main() {
   });
 
   const owner = "0xfe9a6492dD767525D46b0F69c5c90861f2819b5C";
-  const address = "0x66C8de5b72CaBaDcF612B89Dd3DAfdb247FB29B7";
-  const delayedExecution = "0x7E320a0dbFA49bd0B5bcA996E144d6c2d5D5462C";
-  const fiatPayment = "0x76c389a9B8e958e5554385Aa61C7b67cED4C359C";
+  const address = "0xF44B7904D5A58C990cE74161FcE7aCCc2CCd80C5";
+  const delayedExecution = "0xe8378E081ed4bef31E98F2341D84B5D48508bf88";
+  const fiatPayment = "0x297dC4DFa25DD216ae1A317881B87C72208Abb81";
   const USDC = "0xCe359Fe4fbbd25c2Ac36549852e175A486AD8428";
 
   const msaAdvanced = await hre.viem.getContractAt("MSAAdvanced", address);
@@ -211,7 +209,7 @@ async function main() {
   const transfer = encodeFunctionData({
     abi: erc20Abi,
     functionName: "transfer",
-    args: [owner, BigInt(19000000)],
+    args: [owner, BigInt(3000000)],
   });
 
   const initExecution = encodeFunctionData({
@@ -220,24 +218,18 @@ async function main() {
     args: [USDC, BigInt(0), transfer],
   });
 
-  const initTxData = encodeFunctionData({
-    abi: exec.abi,
-    functionName: "execute",
-    args: [address, delayedExecution, BigInt(0), initExecution],
-  });
-
   const txData = encodeFunctionData({
     abi: exec.abi,
     functionName: "execute",
-    args: [address, USDC, BigInt(0), transfer],
+    args: [USDC, BigInt(0), transfer],
   });
 
   const txHashInit = await smartAccountClient.sendTransaction({
     to: delayedExecution,
-    data: initTxData,
+    data: initExecution,
     nonce:
       (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(4),
+      BigInt(0),
   });
 
   console.log("Init transaction hash:", txHashInit);
@@ -245,18 +237,26 @@ async function main() {
   const reserve = encodeFunctionData({
     abi: payment.abi,
     functionName: "reserve",
-    args: [USDC, [BigInt(1000000)], [owner]],
+    args: [USDC, [BigInt(2000000)], [owner]],
   });
+
+  const startTime = new Date();
 
   const txHashReserve = await smartAccountClient.sendTransaction({
     to: fiatPayment,
     data: reserve,
     nonce:
       (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(5),
+      BigInt(1),
   });
 
   console.log("Reserve transaction hash:", txHashReserve);
+
+  const endTime = new Date();
+  console.log(
+    "Reserve transaction time:",
+    endTime.getTime() - startTime.getTime()
+  );
 
   await new Promise((f) => setTimeout(f, 30000));
 
@@ -265,7 +265,7 @@ async function main() {
     data: txData,
     nonce:
       (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(6),
+      BigInt(2),
   });
 
   console.log("Transaction hash:", txHash);

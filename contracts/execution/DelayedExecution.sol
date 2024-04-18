@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC7579HookDestruct} from "modulekit/modules/ERC7579HookDestruct.sol";
 import {IERC7579Account} from "modulekit/Accounts.sol";
 import {ERC7579ExecutorBase} from "modulekit/modules/ERC7579ExecutorBase.sol";
+import {SessionKeyBase} from "modulekit/modules/SessionKeyBase.sol";
 import {ExecutionLib, Execution} from "erc7579/lib/ExecutionLib.sol";
 import {ModeLib} from "erc7579/lib/ModeLib.sol";
 
@@ -16,20 +17,27 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
  * @author OffBlocks Team
  * @notice Delayed execution module that allows for the initiation of transactions with a cooldown period
  */
-contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
+contract DelayedExecution is
+  ERC7579HookDestruct,
+  ERC7579ExecutorBase,
+  SessionKeyBase,
+  Ownable
+{
   using EnumerableMap for EnumerableMap.Bytes32ToUintMap;
   using EnumerableSet for EnumerableSet.AddressSet;
 
   bytes32 internal constant PASS = keccak256("pass");
 
-  /**
-   * @notice A struct representing module configuration for the account
-   * @param cooldown uint256 - The cooldown period in seconds
-   * @param whitelist EnumerableSet.AddressSet - The set of whitelisted executor addresses
-   */
+  /// @notice A struct representing module configuration for the account
+  /// @param cooldown uint256 - The cooldown period in seconds
+  /// @param whitelist EnumerableSet.AddressSet - The set of whitelisted executor addresses
   struct DelayConfig {
     uint256 cooldown;
     EnumerableSet.AddressSet whitelist;
+  }
+
+  struct ScopedAccess {
+    address signer;
   }
 
   /// @notice An event emitted when an execution is initiated
@@ -112,10 +120,10 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
                                      CONFIG
     //////////////////////////////////////////////////////////////////////////*/
 
-  function onInstall(bytes calldata data) external override {
+  function onInstall(bytes calldata _initData) external override {
     DelayConfig storage _config = configs[msg.sender];
     (uint256 _cooldown, address[] memory _whitelist) = abi.decode(
-      data,
+      _initData,
       (uint256, address[])
     );
 
@@ -133,7 +141,7 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     accounts.add(msg.sender);
   }
 
-  function onUninstall(bytes calldata) external override {
+  function onUninstall(bytes calldata /*_deInitData*/) external override {
     delete configs[msg.sender];
     accounts.remove(msg.sender);
   }
@@ -236,22 +244,16 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
   }
 
   function onExecute(
-    address,
+    address /*_msgSender*/,
     address _target,
-    uint256,
-    bytes calldata _callData
+    uint256 /*_value*/,
+    bytes calldata /*_callData*/
   ) internal virtual override returns (bytes memory hookData) {
     if (!this.isInitialized(msg.sender)) {
       revert UnauthorizedAccess();
     }
 
-    bytes4 functionSig;
-
-    if (_callData.length >= 4) {
-      functionSig = bytes4(_callData[0:4]);
-    }
-
-    if (_target == address(this) && functionSig == this.execute.selector) {
+    if (_target == address(this)) {
       return abi.encode(PASS);
     }
 
@@ -264,8 +266,8 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
   }
 
   function onExecuteBatch(
-    address,
-    Execution[] calldata
+    address /*_msgSender*/,
+    Execution[] calldata /*_execs*/
   ) internal virtual override returns (bytes memory) {
     revert UnsupportedExecution();
   }
@@ -280,22 +282,10 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
       revert UnauthorizedAccess();
     }
 
-    bytes4 functionSig;
-
-    if (_callData.length >= 4) {
-      functionSig = bytes4(_callData[0:4]);
-    }
-
     DelayConfig storage _config = configs[msg.sender];
 
-    // check if call is a initExecution or skipExecution
-    if (
-      _target == address(this) &&
-      (functionSig == this.initExecution.selector ||
-        functionSig == this.skipExecution.selector)
-    ) {
-      return abi.encode(PASS);
-    } else if (_config.whitelist.contains(_executor)) {
+    // check if call is for this module or executor is whitelisted
+    if (_target == address(this) || _config.whitelist.contains(_executor)) {
       return abi.encode(PASS);
     } else {
       bytes32 executionHash = _execDigestMemory(_target, _value, _callData);
@@ -319,26 +309,26 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
   }
 
   function onExecuteBatchFromExecutor(
-    address,
-    Execution[] calldata
+    address /*_msgSender*/,
+    Execution[] calldata /*_execs*/
   ) internal virtual override returns (bytes memory) {
     revert UnsupportedExecution();
   }
 
   function onInstallModule(
-    address,
-    uint256,
-    address,
-    bytes calldata
+    address /*_msgSender*/,
+    uint256 /*_moduleType*/,
+    address /*_module*/,
+    bytes calldata /*_initData*/
   ) internal virtual override returns (bytes memory) {
     return abi.encode(PASS);
   }
 
   function onUninstallModule(
-    address,
-    uint256,
-    address,
-    bytes calldata
+    address /*_msgSender*/,
+    uint256 /*_moduleType*/,
+    address /*_module*/,
+    bytes calldata /*_deInitData*/
   ) internal virtual override returns (bytes memory) {
     return abi.encode(PASS);
   }
@@ -348,20 +338,45 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     //////////////////////////////////////////////////////////////////////////*/
 
   /// @notice Executes a single call.
-  /// @param _account The account address
   /// @param _target The target address to call
   /// @param _value The value to send
   /// @param _callData The call data
   function execute(
-    address _account,
     address _target,
     uint256 _value,
     bytes calldata _callData
-  ) external {
-    IERC7579Account(_account).executeFromExecutor(
+  ) external onlySmartAccount {
+    IERC7579Account(msg.sender).executeFromExecutor(
       ModeLib.encodeSimpleSingle(),
       ExecutionLib.encodeSingle(_target, _value, _callData)
     );
+  }
+
+  /*//////////////////////////////////////////////////////////////////////////
+                                VALIDATOR LOGIC
+    //////////////////////////////////////////////////////////////////////////*/
+
+  /// @notice validates that the call (destinationContract, callValue, funcCallData)
+  /// complies with the Session Key permissions represented by sessionKeyData
+  /// @param _target address of the contract to be called
+  /// @param _callData the data for the call.
+  /// @param _sessionKeyData SessionKey data, that describes sessionKey permissions
+  /// @return signer SessionKey signer address
+  function validateSessionParams(
+    address _target,
+    uint256 /*_value*/,
+    bytes calldata _callData,
+    bytes calldata _sessionKeyData,
+    bytes calldata /*_callSpecificData*/
+  )
+    public
+    virtual
+    override
+    onlyFunctionSig(this.execute.selector, bytes4(_callData[:4]))
+    onlyThis(_target)
+    returns (address signer)
+  {
+    signer = abi.decode(_sessionKeyData, (address));
   }
 
   /*//////////////////////////////////////////////////////////////////////////
@@ -369,9 +384,9 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
     //////////////////////////////////////////////////////////////////////////*/
 
   function onPostCheck(
-    bytes calldata hookData
+    bytes calldata _hookData
   ) internal virtual override returns (bool success) {
-    if (keccak256(hookData) == keccak256(abi.encode(PASS))) {
+    if (keccak256(_hookData) == keccak256(abi.encode(PASS))) {
       return true;
     }
 
@@ -395,26 +410,26 @@ contract DelayedExecution is ERC7579HookDestruct, ERC7579ExecutorBase, Ownable {
   }
 
   /// @notice Check if the module is of a certain type
-  /// @param typeID The type ID to check
+  /// @param _typeID The type ID to check
   /// @return true if the module is of the given type, false otherwise
-  function isModuleType(uint256 typeID) external pure override returns (bool) {
-    return typeID == TYPE_HOOK || typeID == TYPE_EXECUTOR;
+  function isModuleType(uint256 _typeID) external pure override returns (bool) {
+    return _typeID == TYPE_HOOK || _typeID == TYPE_EXECUTOR;
   }
 
   function _execDigest(
-    address to,
-    uint256 value,
-    bytes calldata callData
+    address _target,
+    uint256 _value,
+    bytes calldata _callData
   ) internal pure returns (bytes32) {
-    bytes memory _callData = callData;
-    return _execDigestMemory(to, value, _callData);
+    bytes memory callData = _callData;
+    return _execDigestMemory(_target, _value, callData);
   }
 
   function _execDigestMemory(
-    address to,
-    uint256 value,
-    bytes memory callData
+    address _target,
+    uint256 _value,
+    bytes memory _callData
   ) internal pure returns (bytes32 digest) {
-    digest = keccak256(abi.encodePacked(to, value, callData));
+    digest = keccak256(abi.encodePacked(_target, _value, _callData));
   }
 }
