@@ -1,36 +1,20 @@
 // Import the required functions
-import {
-  installModule,
-  getModule,
-  getAccount,
-  getClient,
-  getMFAValidator,
-  getOwnableValidator,
-} from "@rhinestone/module-sdk";
+import {getClient, getOwnableValidator} from "@rhinestone/module-sdk";
 import {
   Address,
-  Hash,
-  concat,
-  createClient,
   createPublicClient,
   encodeFunctionData,
   encodePacked,
   erc20Abi,
-  fromBytes,
-  fromHex,
   http,
   Hex,
-  decodeFunctionData,
   parseAbiParameters,
-  parseAbiParameter,
   encodeAbiParameters,
-  decodeErrorResult,
 } from "viem";
 import {baseSepolia} from "viem/chains";
 import {
   getAccountNonce,
   createSmartAccountClient,
-  ENTRYPOINT_ADDRESS_V06,
   ENTRYPOINT_ADDRESS_V07,
 } from "permissionless";
 import {} from "permissionless/actions/pimlico";
@@ -124,6 +108,7 @@ async function main() {
   });
 
   const owner = "0xfe9a6492dD767525D46b0F69c5c90861f2819b5C";
+  const ownableValidator = "0x652a10b050d7572F2B7563f7a77e79472B5160FD";
   const address = "0xF44B7904D5A58C990cE74161FcE7aCCc2CCd80C5";
   const delayedExecution = "0xe8378E081ed4bef31E98F2341D84B5D48508bf88";
   const fiatPayment = "0x297dC4DFa25DD216ae1A317881B87C72208Abb81";
@@ -199,6 +184,8 @@ async function main() {
     },
   });
 
+  smartAccountClient.writeContract;
+
   const exec = await hre.viem.getContractAt(
     "DelayedExecution",
     delayedExecution
@@ -224,12 +211,17 @@ async function main() {
     args: [USDC, BigInt(0), transfer],
   });
 
+  // calculate nonce key based on entrypoint formula
+  const nonceKey = BigInt(ownableValidator) << BigInt(32);
+
   const txHashInit = await smartAccountClient.sendTransaction({
     to: delayedExecution,
     data: initExecution,
-    nonce:
-      (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(0),
+    nonce: await getAccountNonce(publicClient, {
+      sender: address,
+      entryPoint: ENTRYPOINT_ADDRESS_V07,
+      key: nonceKey,
+    }),
   });
 
   console.log("Init transaction hash:", txHashInit);
@@ -245,9 +237,11 @@ async function main() {
   const txHashReserve = await smartAccountClient.sendTransaction({
     to: fiatPayment,
     data: reserve,
-    nonce:
-      (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(1),
+    nonce: await getAccountNonce(publicClient, {
+      sender: address,
+      entryPoint: ENTRYPOINT_ADDRESS_V07,
+      key: nonceKey,
+    }),
   });
 
   console.log("Reserve transaction hash:", txHashReserve);
@@ -263,15 +257,19 @@ async function main() {
   const txHash = await smartAccountClient.sendTransaction({
     to: delayedExecution,
     data: txData,
-    nonce:
-      (BigInt("0x652a10b050d7572F2B7563f7a77e79472B5160FD") << BigInt(96)) +
-      BigInt(2),
+    nonce: await getAccountNonce(publicClient, {
+      sender: address,
+      entryPoint: ENTRYPOINT_ADDRESS_V07,
+      key: nonceKey,
+    }),
   });
 
   console.log("Transaction hash:", txHash);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => process.exit());
